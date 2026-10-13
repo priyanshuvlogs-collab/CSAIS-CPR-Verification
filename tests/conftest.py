@@ -10,7 +10,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ADMIN_PASSWORD", "test-pass")
     monkeypatch.setenv("SECRET_KEY", "test-secret")
-    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     from app.config import get_settings
 
     get_settings.cache_clear()
@@ -26,14 +26,14 @@ def env(tmp_path, monkeypatch):
 
 @pytest.fixture
 def fake_ai(monkeypatch):
-    """Replace the OpenAI call with a configurable fake."""
+    """Replace the Claude call with a configurable fake."""
     state = {"response": {
         "is_cpr_certificate": True, "holder_name": "John Smith", "issuer": "American Heart Association",
         "cert_id": "AHA-123456", "course_type": "BLS Provider", "issue_date": "2025-01-10",
         "expiry_date": "2027-01-31", "visual_tamper_signs": [], "tamper_likelihood": "none", "confidence": 0.95,
     }}
 
-    def fake(image, mime, text=None, client=None):
+    def fake(data, mime, client=None):
         state["last_mime"] = mime
         return dict(state["response"])
 

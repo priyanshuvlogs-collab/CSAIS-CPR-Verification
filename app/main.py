@@ -216,7 +216,7 @@ def dashboard(request: Request, status: str = "", risk: str = "", site: str = ""
         "statuses": STATUSES, "sites": sites, "pending": pending,
         "EXPIRED": EXPIRED, "EXPIRING": EXPIRING, "VALID": VALID, "UNKNOWN": UNKNOWN,
         "warning_months": get_settings().expiry_warning_months,
-        "ai_configured": bool(get_settings().openai_api_key),
+        "ai_configured": bool(get_settings().anthropic_api_key),
     })
 
 

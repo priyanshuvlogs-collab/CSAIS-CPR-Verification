@@ -12,7 +12,7 @@
 </div>
 
 {% if not ai_configured %}
-<div class="alert warn">OPENAI_API_KEY is not set. File forensics still run, but certificate details and dates can't be read automatically. Add the key to <code>.env</code> and use “Re-scan incomplete”.</div>
+<div class="alert warn">ANTHROPIC_API_KEY is not set. File forensics still run, but certificate details and dates can't be read automatically. Add the key to <code>.env</code> and use “Re-scan incomplete”.</div>
 {% endif %}
 {% if pending %}<div class="alert info">{{ pending }} certificate(s) are still being scanned. Refresh in a moment.</div>{% endif %}
 
@@ -73,6 +73,6 @@
 <form method="post" action="/admin/rescan-all" class="footer-actions">
   <input type="hidden" name="csrf" value="{{ csrf_token(request) }}">
   <button class="btn ghost" name="only_failed" value="1">Re-scan incomplete</button>
-  <button class="btn ghost" onclick="return confirm('Re-scan every certificate? This uses OpenAI credits.')">Re-scan all</button>
+  <button class="btn ghost" onclick="return confirm('Re-scan every certificate? This uses Claude API credits.')">Re-scan all</button>
 </form>
 {% endblock %}

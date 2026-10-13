@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 
 from app.config import get_settings
 from app.models import Submission
-from app.services import extract, pdf_utils, tamper
+from app.services import extract, tamper
 from app.services.expiry import resolve_expiry
 
 log = logging.getLogger(__name__)
@@ -34,12 +34,7 @@ def scan_submission(db, sub: Submission, client=None) -> Submission:
 
     ai = None
     try:
-        if sub.mime == "application/pdf":
-            image, image_mime = pdf_utils.render_first_page_png(data), "image/png"
-            text = pdf_utils.extract_text(data)
-        else:
-            image, image_mime, text = data, sub.mime, None
-        ai = extract.extract_fields(image, image_mime, text, client=client)
+        ai = extract.extract_fields(data, sub.mime, client=client)
         sub.scan_status = "done"
         sub.scan_error = None
     except extract.AIUnavailable as exc:

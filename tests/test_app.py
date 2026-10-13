@@ -24,9 +24,9 @@ def test_upload_and_scan_jpeg(client, fake_ai, admin):
     assert "John Smith" in r.text and "American Heart Association" in r.text
 
 
-def test_pdf_is_rendered_to_png_for_ai(client, fake_ai, admin):
+def test_pdf_sent_as_pdf_and_previewed(client, fake_ai, admin):
     upload(client, make_cert_pdf(), "cert.pdf")
-    assert fake_ai["last_mime"] == "image/png"
+    assert fake_ai["last_mime"] == "application/pdf"
     r = client.get("/admin/submissions/1/preview.png")
     assert r.status_code == 200 and r.content.startswith(b"\x89PNG")
 
@@ -79,7 +79,7 @@ def test_without_api_key_forensics_still_run(client, admin):
         assert sub.scan_status == "ai_unavailable"
         assert sub.tamper_level in ("Medium", "High")
     r = client.get("/admin")
-    assert "OPENAI_API_KEY is not set" in r.text
+    assert "ANTHROPIC_API_KEY is not set" in r.text
 
 
 def test_ai_error_is_recorded(client, admin, monkeypatch):
@@ -171,34 +171,36 @@ def test_detail_update_and_csrf(client, fake_ai, admin):
     assert client.get("/admin/submissions/1").status_code == 404
 
 
-def test_extract_fields_request_shape():
-    """The real extractor sends a strict JSON schema + image to OpenAI."""
-    import json
+def _fake_claude(captured, stop_reason="end_turn", text='{"holder_name": "A"}'):
+    from types import SimpleNamespace as NS
 
-    captured = {}
-
-    class FakeCompletions:
+    class Messages:
         def create(self, **kw):
             captured.update(kw)
+            return NS(stop_reason=stop_reason, stop_details=NS(explanation="policy") if stop_reason == "refusal" else None,
+                      content=[NS(type="text", text=text)])
 
-            class Msg:
-                content = json.dumps({"holder_name": "A"})
+    return NS(beta=NS(messages=Messages()))
 
-            class Choice:
-                message = Msg()
 
-            class Resp:
-                choices = [Choice()]
-
-            return Resp()
-
-    class FakeClient:
-        class chat:
-            completions = FakeCompletions()
-
-    out = extract.extract_fields(b"\x89PNG", "image/png", "text layer", client=FakeClient())
+def test_extract_fields_request_shape():
+    """The real extractor sends the file + a JSON schema to Claude, with refusal fallbacks on."""
+    captured = {}
+    out = extract.extract_fields(b"%PDF-1.7", "application/pdf", client=_fake_claude(captured))
     assert out == {"holder_name": "A"}
-    assert captured["response_format"]["json_schema"]["strict"] is True
-    content = captured["messages"][1]["content"]
-    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
-    assert "text layer" in content[2]["text"]
+    assert captured["model"] == "claude-opus-5-5"
+    assert captured["output_config"]["format"]["type"] == "json_schema"
+    assert captured["fallbacks"] == "default"
+    block = captured["messages"][0]["content"][0]
+    assert block["type"] == "document" and block["source"]["media_type"] == "application/pdf"
+
+    extract.extract_fields(b"\xff\xd8\xff", "image/jpeg", client=_fake_claude(captured))
+    block = captured["messages"][0]["content"][0]
+    assert block["type"] == "image" and block["source"]["media_type"] == "image/jpeg"
+
+
+def test_extract_fields_refusal():
+    import pytest
+
+    with pytest.raises(extract.AIRefused):
+        extract.extract_fields(b"\xff\xd8\xff", "image/jpeg", client=_fake_claude({}, stop_reason="refusal"))

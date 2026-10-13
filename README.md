@@ -2,7 +2,7 @@
 
 A web portal where security guards upload their CPR / BLS / First Aid certificates and an admin can:
 
-- **Scan** each certificate with OpenAI vision to read the holder name, issuer, certificate number, and issue/expiry dates
+- **Scan** each certificate with Claude (Anthropic API) to read the holder name, issuer, certificate number, and issue/expiry dates
 - **See expiry status** for each one: **Expired**, **Expiring Soon** (within 6 months, configurable), **Valid**, or **Unknown**
 - **Check for tampering** with a 0–100 risk score and a list of the specific indicators found
 - **Export reports** as CSV, Excel, or PDF, using the dashboard's current filters
@@ -11,7 +11,7 @@ A web portal where security guards upload their CPR / BLS / First Aid certificat
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env        # then add OPENAI_API_KEY, ADMIN_PASSWORD, SECRET_KEY
+cp .env.example .env        # then add ANTHROPIC_API_KEY, ADMIN_PASSWORD, SECRET_KEY
 uvicorn app.main:app --reload
 ```
 
@@ -30,7 +30,7 @@ Run in production behind HTTPS, for example with a reverse proxy such as Caddy o
 ## How it works
 
 1. **Upload.** A guard enters their name, guard ID, and optionally email and site, then uploads a JPG, PNG, or PDF (max 10 MB). The file type is checked from the file's contents, not its extension. The file is saved with a random name.
-2. **Scan.** The scan runs in the background right after upload. A PDF's first page is rendered to an image, and the PDF's text layer is sent along with it. OpenAI (`OPENAI_MODEL`, default `gpt-4o`) returns structured JSON with the certificate fields and its visual tampering observations.
+2. **Scan.** The scan runs in the background right after upload. The photo or PDF is sent to Claude (`ANTHROPIC_MODEL`, default `claude-opus-5-5`), which reads PDFs directly and returns structured JSON with the certificate fields and its visual tampering observations. If Claude's safety filter declines a document, the API retries it on a fallback model automatically.
 3. **Expiry.** Status is recalculated from today's date every time the dashboard loads, so a certificate moves to "Expiring Soon" or "Expired" without a re-scan. If a card only shows an issue date, expiry is set to issue date + 2 years and marked *inferred*.
 4. **Tamper risk.** Independent signals each add points:
 
@@ -46,12 +46,12 @@ Run in production behind HTTPS, for example with a reverse proxy such as Caddy o
    Scores of 0–29 are **Low**, 30–59 **Medium**, and 60+ **High**. These are indicators for review, not proof. Confirm flagged certificates with the issuer, for example through the AHA eCard or Red Cross certificate lookup.
 5. **Review.** On the detail page the admin can view the file, correct dates, add notes, mark the certificate as reviewed, re-scan it, or delete it.
 
-Without an `OPENAI_API_KEY`, uploads still work and the file forensics still run. Use **Re-scan incomplete** on the dashboard after adding the key.
+Without an `ANTHROPIC_API_KEY`, uploads still work and the file forensics still run. Use **Re-scan incomplete** on the dashboard after adding the key.
 
 ## Security notes
 
 - Only the admin can see uploaded files and reports. The admin session cookie is signed. Login locks for 15 minutes after 5 failed attempts. Admin actions require a CSRF token.
-- The OpenAI key is used only on the server and is never sent to the browser.
+- The Claude API key is used only on the server and is never sent to the browser.
 - `data/` (the SQLite DB and uploads) and `.env` are git-ignored. Back up `data/`.
 
 ## Tests
@@ -61,4 +61,4 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-The tests use a fake OpenAI client, so they need no API key.
+The tests use a fake Claude client, so they need no API key.
