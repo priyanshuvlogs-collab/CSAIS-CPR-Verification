@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_badge, risk_badge, scan_badge %}
+{% block title %}{{ sub.guard_name }} · CPR Certificate Portal{% endblock %}
+{% block content %}
+<p><a href="/admin">← Back to dashboard</a></p>
+<div class="page-head">
+  <h1>{{ sub.guard_name }} <span class="muted">· {{ sub.guard_id }}</span></h1>
+  <div class="actions">
+    <form method="post" action="/admin/submissions/{{ sub.id }}/rescan" class="inline">
+      <input type="hidden" name="csrf" value="{{ csrf_token(request) }}">
+      <button class="btn">↻ Re-scan</button>
+    </form>
+    <form method="post" action="/admin/submissions/{{ sub.id }}/delete" class="inline" onsubmit="return confirm('Delete this submission and its file?')">
+      <input type="hidden" name="csrf" value="{{ csrf_token(request) }}">
+      <button class="btn danger">Delete</button>
+    </form>
+  </div>
+</div>
+
+<div class="grid2">
+  <div class="card preview">
+    {% if sub.mime == 'application/pdf' %}
+      <a href="/admin/submissions/{{ sub.id }}/file" target="_blank"><img src="/admin/submissions/{{ sub.id }}/preview.png" alt="Certificate PDF, page 1"></a>
+      <p><a class="btn" href="/admin/submissions/{{ sub.id }}/file" target="_blank">Open original PDF</a></p>
+    {% else %}
+      <a href="/admin/submissions/{{ sub.id }}/file" target="_blank"><img src="/admin/submissions/{{ sub.id }}/file" alt="Certificate image"></a>
+    {% endif %}
+    <p class="muted small">{{ sub.original_filename }} · SHA-256 {{ sub.sha256[:16] }}…</p>
+  </div>
+
+  <div class="stack">
+    <div class="card">
+      <h2>Expiry</h2>
+      <p class="status-line">{{ status_badge(info.status) }} {{ scan_badge(sub) }}
+        {% if info.days_left is not none %}
+          <span>{% if info.days_left < 0 %}expired {{ -info.days_left }} days ago{% else %}{{ info.days_left }} days left{% endif %}</span>
+        {% endif %}
+      </p>
+      {% if sub.scan_error %}<div class="alert warn small">{{ sub.scan_error }}</div>{% endif %}
+      <dl class="kv">
+        <dt>Name on certificate</dt><dd>{{ sub.holder_name or '—' }}
+          {% if sub.name_match == true %}<span class="badge risk-low small">matches</span>{% elif sub.name_match == false %}<span class="badge risk-medium small">mismatch</span>{% endif %}</dd>
+        <dt>Issuer</dt><dd>{{ sub.issuer or '—' }}</dd>
+        <dt>Course</dt><dd>{{ sub.course_type or '—' }}</dd>
+        <dt>Certificate #</dt><dd>{{ sub.cert_id or '—' }}</dd>
+        <dt>Issue date</dt><dd>{{ sub.issue_date or '—' }}</dd>
+        <dt>Expiry date</dt><dd>{{ sub.expiry_date or '—' }}{% if sub.expiry_inferred %} <span class="muted small">(inferred: issue + 2 years)</span>{% endif %}
+          {% if sub.dates_overridden %} <span class="muted small">(edited by admin)</span>{% endif %}</dd>
+        <dt>AI confidence</dt><dd>{% if sub.ai_confidence is not none %}{{ (sub.ai_confidence * 100)|round|int if sub.ai_confidence <= 1 else sub.ai_confidence|round|int }}%{% else %}—{% endif %}</dd>
+        <dt>Guard email / site</dt><dd>{{ sub.email or '—' }} · {{ sub.site or '—' }}</dd>
+        <dt>Uploaded</dt><dd>{{ sub.uploaded_at.strftime('%Y-%m-%d %H:%M') }} UTC</dd>
+      </dl>
+    </div>
+
+    <div class="card">
+      <h2>Tamper risk indicators {{ risk_badge(sub.tamper_level, sub.tamper_score) }}</h2>
+      {% if sub.tamper_reasons %}
+        <ul class="reasons">
+        {% for r in sub.tamper_reasons %}
+          <li><span class="pts">+{{ r.points }}</span> <strong>{{ r.signal }}:</strong> {{ r.detail }}</li>
+        {% endfor %}
+        </ul>
+      {% elif sub.tamper_level %}
+        <p class="muted">No tamper indicators found.</p>
+      {% else %}
+        <p class="muted">Not scanned yet.</p>
+      {% endif %}
+      <p class="muted small">These are automated signals, not proof. For flagged certificates, confirm with the issuer (for example AHA eCard or Red Cross certificate lookup) using the certificate number.</p>
+    </div>
+
+    <div class="card">
+      <h2>Review</h2>
+      <form method="post" action="/admin/submissions/{{ sub.id }}/update" class="stack">
+        <input type="hidden" name="csrf" value="{{ csrf_token(request) }}">
+        <div class="row2">
+          <label>Issue date <input type="date" name="issue_date" value="{{ sub.issue_date or '' }}"></label>
+          <label>Expiry date <input type="date" name="expiry_date" value="{{ sub.expiry_date if sub.expiry_date and not sub.expiry_inferred else '' }}"></label>
+        </div>
+        <label>Notes <textarea name="admin_notes" rows="3">{{ sub.admin_notes or '' }}</textarea></label>
+        <label class="check"><input type="checkbox" name="reviewed" value="1" {% if sub.reviewed %}checked{% endif %}> Reviewed / verified with issuer</label>
+        <button class="btn primary">Save</button>
+      </form>
+    </div>
+
+    {% if others %}
+    <div class="card">
+      <h2>Other uploads by this guard</h2>
+      <ul>{% for o in others %}<li><a href="/admin/submissions/{{ o.id }}">#{{ o.id }} · {{ o.original_filename }}</a> <span class="muted small">{{ o.uploaded_at.strftime('%Y-%m-%d') }}</span></li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

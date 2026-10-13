@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Admin login{% endblock %}
+{% block main_class %}container narrow{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Admin login</h1>
+  {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+  <form method="post" action="/admin/login" class="stack">
+    <label>Password <input type="password" name="password" required autofocus autocomplete="current-password"></label>
+    <button class="btn primary" type="submit">Log in</button>
+  </form>
+</div>
+{% endblock %}

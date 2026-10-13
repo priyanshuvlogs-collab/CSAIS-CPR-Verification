@@ -1,0 +1,13 @@
+{% macro status_badge(status) -%}
+  <span class="badge st-{{ status|lower|replace(' ', '-') }}">{{ status }}</span>
+{%- endmacro %}
+{% macro risk_badge(level, score=None) -%}
+  {% if level %}<span class="badge risk-{{ level|lower }}">{{ level }}{% if score is not none %} · {{ score }}{% endif %}</span>
+  {% else %}<span class="muted">—</span>{% endif %}
+{%- endmacro %}
+{% macro scan_badge(sub) -%}
+  {% if sub.scan_status == 'pending' %}<span class="badge scan">Scanning…</span>
+  {% elif sub.scan_status == 'error' %}<span class="badge risk-high" title="{{ sub.scan_error }}">Scan error</span>
+  {% elif sub.scan_status == 'ai_unavailable' %}<span class="badge scan" title="{{ sub.scan_error }}">AI off</span>
+  {% endif %}
+{%- endmacro %}
