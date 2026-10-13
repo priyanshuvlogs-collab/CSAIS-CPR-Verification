@@ -17,8 +17,11 @@
       <label>Email
         <input type="email" name="email" maxlength="200" value="{{ form.email or '' }}" autocomplete="email">
       </label>
-      <label>Site / Location
-        <input name="site" maxlength="200" value="{{ form.site or '' }}">
+      <label>Site / Location <span class="req">*</span>
+        <input name="site" list="site-list" required minlength="2" maxlength="200" autocomplete="off"
+               placeholder="Start typing to pick your site" value="{{ form.site or '' }}">
+        <datalist id="site-list">{% for s in sites %}<option value="{{ s }}">{% endfor %}</datalist>
+        <span class="muted small">Not in the list? Type the full site name and it will be added.</span>
       </label>
     </div>
     <label>Certificate file (JPG, PNG or PDF, max {{ max_mb }} MB) <span class="req">*</span>

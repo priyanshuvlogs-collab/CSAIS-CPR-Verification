@@ -13,13 +13,13 @@ from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException
 from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import get_settings
 from app.db import get_db, init_engine
-from app.models import Submission, SubmissionFile
-from app.services import pdf_utils, reports, scanner
+from app.models import Site, Submission, SubmissionFile
+from app.services import pdf_utils, reports, scanner, sites as site_svc
 from app.services.expiry import EXPIRED, EXPIRING, STATUSES, UNKNOWN, VALID, resolve_expiry, status_for
 from app.services.extract import parse_date
 
@@ -143,9 +143,10 @@ def logout(request: Request):
 # ------------------------------------------------------------------ guard upload
 
 @app.get("/")
-def upload_form(request: Request):
+def upload_form(request: Request, db=Depends(get_db)):
     return templates.TemplateResponse(request, "upload.html", {"error": None, "form": {},
-                                                               "max_mb": get_settings().max_upload_mb})
+                                                               "max_mb": get_settings().max_upload_mb,
+                                                               "sites": site_svc.active_names(db)})
 
 
 @app.post("/upload")
@@ -155,7 +156,7 @@ async def upload(
     guard_name: str = Form(...),
     guard_id: str = Form(...),
     email: str = Form(""),
-    site: str = Form(""),
+    site: str = Form(...),
     certificate: UploadFile = File(...),
     db=Depends(get_db),
 ):
@@ -163,12 +164,15 @@ async def upload(
     form = {"guard_name": guard_name, "guard_id": guard_id, "email": email, "site": site}
 
     def fail(msg):
-        return templates.TemplateResponse(request, "upload.html", {"error": msg, "form": form, "max_mb": s.max_upload_mb},
+        return templates.TemplateResponse(request, "upload.html", {"error": msg, "form": form, "max_mb": s.max_upload_mb,
+                                                                   "sites": site_svc.active_names(db)},
                                           status_code=400)
 
     guard_name, guard_id = guard_name.strip(), guard_id.strip()
     if not guard_name or not guard_id:
         return fail("Please enter your full name and guard ID.")
+    if len(site_svc.clean(site)) < 2:
+        return fail("Please choose your site, or type its name if it is not in the list.")
     max_bytes = s.max_upload_mb * 1024 * 1024
     data = await certificate.read(max_bytes + 1)
     if not data:
@@ -180,9 +184,10 @@ async def upload(
         return fail("Unsupported file type. Please upload a JPG, PNG or PDF.")
     mime, ext = kind
 
+    site_row = site_svc.get_or_create(db, site, added_by="guard")
     sub = Submission(
         guard_name=guard_name[:200], guard_id=guard_id[:100], email=email.strip()[:200] or None,
-        site=site.strip()[:200] or None, original_filename=(certificate.filename or "upload")[:300],
+        site=site_row.name, original_filename=(certificate.filename or "upload")[:300],
         sha256=hashlib.sha256(data).hexdigest(), mime=mime, file=SubmissionFile(data=data),
     )
     db.add(sub)
@@ -222,7 +227,8 @@ def dashboard(request: Request, status: str = "", risk: str = "", site: str = ""
               rescanned: int | None = None, remaining: int = 0, _=Depends(require_admin), db=Depends(get_db)):
     items = filtered(db, status, risk, site, q, reviewed)
     all_rows = reports.build_rows(filtered(db))
-    sites = sorted({sub.site for sub in db.scalars(select(Submission)) if sub.site})
+    sites = sorted({sub.site for sub in db.scalars(select(Submission)) if sub.site} | set(site_svc.active_names(db)),
+                   key=str.lower)
     pending = sum(1 for sub, _i in items if sub.scan_status == "pending")
     return templates.TemplateResponse(request, "dashboard.html", {
         "items": items,
@@ -330,6 +336,50 @@ def delete(request: Request, sub_id: int, csrf: str = Form(""), _=Depends(requir
     db.delete(sub)
     db.commit()
     return RedirectResponse("/admin", status_code=303)
+
+
+@app.get("/admin/sites")
+def sites_page(request: Request, msg: str = "", _=Depends(require_admin), db=Depends(get_db)):
+    warning_months = get_settings().expiry_warning_months
+    stats: dict[str, dict] = {}
+    latest: dict[tuple, tuple] = {}
+    for sub, info in filtered(db):  # newest first, so the first per guard+site is their current certificate
+        key = ((sub.site or "").lower(), sub.guard_id.lower())
+        if key not in latest:
+            latest[key] = (sub, info)
+    for (site_key, _gid), (sub, info) in latest.items():
+        st = stats.setdefault(site_key, {"guards": 0, EXPIRED: 0, EXPIRING: 0, VALID: 0, UNKNOWN: 0, "high": 0})
+        st["guards"] += 1
+        st[info.status] += 1
+        st["high"] += sub.tamper_level == "High"
+    all_sites = db.scalars(select(Site).order_by(Site.active.desc(), func.lower(Site.name))).all()
+    return templates.TemplateResponse(request, "sites.html", {
+        "sites": all_sites, "stats": stats, "msg": msg, "warning_months": warning_months,
+        "EXPIRED": EXPIRED, "EXPIRING": EXPIRING, "VALID": VALID, "UNKNOWN": UNKNOWN,
+    })
+
+
+@app.post("/admin/sites")
+def sites_add(request: Request, csrf: str = Form(""), names: str = Form(""), _=Depends(require_admin),
+              db=Depends(get_db)):
+    check_csrf(request, csrf)
+    added, existing = site_svc.bulk_add(db, names)
+    db.commit()
+    msg = f"Added {added} site(s)." + (f" {existing} already in the list." if existing else "")
+    return RedirectResponse(f"/admin/sites?{urlencode({'msg': msg})}", status_code=303)
+
+
+@app.post("/admin/sites/{site_id}/toggle")
+def sites_toggle(request: Request, site_id: int, csrf: str = Form(""), _=Depends(require_admin), db=Depends(get_db)):
+    check_csrf(request, csrf)
+    site = db.get(Site, site_id)
+    if not site:
+        raise HTTPException(404, "Site not found")
+    site.active = not site.active
+    if site.active:
+        site.added_by = "admin"  # an admin has now reviewed it
+    db.commit()
+    return RedirectResponse("/admin/sites", status_code=303)
 
 
 @app.get("/admin/reports/export.{fmt}")

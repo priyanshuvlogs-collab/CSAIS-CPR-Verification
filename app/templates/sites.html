@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Sites · CPR Certificate Portal{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Sites</h1>
+</div>
+{% if msg %}<div class="alert info">{{ msg }}</div>{% endif %}
+
+<div class="card">
+  <h2>Add sites</h2>
+  <form method="post" action="/admin/sites" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf_token(request) }}">
+    <label>One site per line (you can paste a whole list from Excel or the check-in app)
+      <textarea name="names" rows="4" required placeholder="Costco Scarborough&#10;Walmart Brampton"></textarea>
+    </label>
+    <button class="btn primary">Add to list</button>
+  </form>
+</div>
+
+<div class="table-wrap" style="margin-top:1rem">
+<table class="data">
+  <thead><tr>
+    <th>Site</th><th>Guards</th><th>Expired</th><th>Expiring ≤ {{ warning_months }} mo</th><th>Valid</th><th>Unknown</th><th>High risk</th><th></th>
+  </tr></thead>
+  <tbody>
+  {% for site in sites %}
+    {% set st = stats.get(site.name.lower(), {}) %}
+    <tr{% if not site.active %} class="muted"{% endif %}>
+      <td><a href="/admin?site={{ site.name|urlencode }}"><strong>{{ site.name }}</strong></a>
+        {% if site.added_by == 'guard' %}<br><span class="badge risk-medium small" title="Typed in by a guard — check the spelling">added by guard</span>{% endif %}
+        {% if not site.active %}<br><span class="badge scan small">hidden from guards</span>{% endif %}</td>
+      <td>{{ st.get('guards', 0) }}</td>
+      <td>{% if st.get(EXPIRED) %}<span class="badge st-expired">{{ st[EXPIRED] }}</span>{% else %}0{% endif %}</td>
+      <td>{% if st.get(EXPIRING) %}<span class="badge st-expiring-soon">{{ st[EXPIRING] }}</span>{% else %}0{% endif %}</td>
+      <td>{{ st.get(VALID, 0) }}</td>
+      <td>{{ st.get(UNKNOWN, 0) }}</td>
+      <td>{% if st.get('high') %}<span class="badge risk-high">{{ st['high'] }}</span>{% else %}0{% endif %}</td>
+      <td>
+        <form method="post" action="/admin/sites/{{ site.id }}/toggle" class="inline">
+          <input type="hidden" name="csrf" value="{{ csrf_token(request) }}">
+          <button class="btn ghost small">{% if site.active %}Hide{% else %}Show{% endif %}</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="8" class="empty">No sites yet. Paste your site list above, or they will appear as guards upload.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="muted small">Counts use each guard's most recent certificate at that site. Hidden sites stay on old records but are no longer offered to guards.</p>
+{% endblock %}
