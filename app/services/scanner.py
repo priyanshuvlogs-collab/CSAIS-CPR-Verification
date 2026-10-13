@@ -1,8 +1,6 @@
 """Runs the full scan pipeline for one submission."""
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
-
 from sqlalchemy import func, select
 
 from app.config import get_settings
@@ -30,7 +28,7 @@ def find_duplicates(db, sub: Submission) -> list[dict]:
 
 def scan_submission(db, sub: Submission, client=None) -> Submission:
     settings = get_settings()
-    data = Path(sub.stored_path).read_bytes()
+    data = sub.data
 
     ai = None
     try:
@@ -66,7 +64,7 @@ def scan_submission(db, sub: Submission, client=None) -> Submission:
 
 def apply_tamper(db, sub: Submission, data: bytes | None = None):
     settings = get_settings()
-    data = data if data is not None else Path(sub.stored_path).read_bytes()
+    data = data if data is not None else sub.data
     result = tamper.assess(
         data=data,
         mime=sub.mime,

@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Float, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 
@@ -23,7 +23,6 @@ class Submission(Base):
 
     # File
     original_filename: Mapped[str] = mapped_column(String(300))
-    stored_path: Mapped[str] = mapped_column(String(500))
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     mime: Mapped[str] = mapped_column(String(50))
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
@@ -54,3 +53,18 @@ class Submission(Base):
     admin_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     reviewed: Mapped[bool] = mapped_column(Boolean, default=False)
     dates_overridden: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    file: Mapped["SubmissionFile"] = relationship(cascade="all, delete-orphan", lazy="select")
+
+    @property
+    def data(self) -> bytes:
+        return self.file.data
+
+
+class SubmissionFile(Base):
+    """Uploaded certificate bytes, kept in the database so the app needs no persistent disk."""
+
+    __tablename__ = "submission_files"
+
+    submission_id: Mapped[int] = mapped_column(ForeignKey("submissions.id", ondelete="CASCADE"), primary_key=True)
+    data: Mapped[bytes] = mapped_column(LargeBinary)

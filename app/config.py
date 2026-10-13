@@ -18,11 +18,12 @@ class Settings(BaseSettings):
     max_upload_mb: int = 10
 
     data_dir: Path = Path("data")
+    # e.g. postgresql+psycopg://user:pass@host:6543/postgres ; defaults to SQLite in data_dir
     database_url: str = ""
-
-    @property
-    def upload_dir(self) -> Path:
-        return self.data_dir / "uploads"
+    # Postgres schema to keep the portal's tables in (ignored for SQLite)
+    db_schema: str = ""
+    # "background" scans after the upload response; "sync" scans during the request (serverless hosts)
+    scan_mode: str = "background"
 
     @property
     def db_url(self) -> str:

@@ -18,6 +18,20 @@ uvicorn app.main:app --reload
 - Guard upload form: http://localhost:8000/
 - Admin dashboard: http://localhost:8000/admin
 
+### Deploying on Vercel + Supabase
+
+The app runs as a single Vercel Python function (`app/main.py`, see `vercel.json`) and keeps all data, including uploaded files, in Postgres. Set these environment variables in the Vercel project:
+
+| Variable | Value |
+|---|---|
+| `DATABASE_URL` | Supabase pooler URL in transaction mode, `postgresql+psycopg://…:6543/postgres` |
+| `DB_SCHEMA` | `cpr` |
+| `SCAN_MODE` | `sync` (Vercel can't run work after the response is sent) |
+| `MAX_UPLOAD_MB` | `4` (Vercel limits request bodies to 4.5 MB; large phone photos are shrunk in the browser first) |
+| `ANTHROPIC_API_KEY`, `ADMIN_PASSWORD`, `SECRET_KEY` | as above |
+
+`GET /healthz` returns `{"ok": true}` when the database is reachable.
+
 With Docker:
 
 ```bash

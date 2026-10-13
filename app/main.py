@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import hmac
 import secrets
 import time
@@ -6,22 +7,24 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import select, text
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import get_settings
 from app.db import get_db, init_engine
-from app.models import Submission
+from app.models import Submission, SubmissionFile
 from app.services import pdf_utils, reports, scanner
 from app.services.expiry import EXPIRED, EXPIRING, STATUSES, UNKNOWN, VALID, resolve_expiry, status_for
 from app.services.extract import parse_date
 
 BASE_DIR = Path(__file__).parent
+log = logging.getLogger("cpr")
 MAGIC = {b"\xff\xd8\xff": ("image/jpeg", ".jpg"), b"\x89PNG\r\n\x1a\n": ("image/png", ".png"), b"%PDF-": ("application/pdf", ".pdf")}
 
 
@@ -48,6 +51,17 @@ async def security_headers(request: Request, call_next):
     return response
 
 
+@app.get("/healthz")
+def healthz(db=Depends(get_db)):
+    """Liveness + database check. Details go to the server log, not the response."""
+    try:
+        db.execute(text("select 1"))
+        return {"ok": True}
+    except Exception:
+        log.exception("Database health check failed")
+        return Response('{"ok": false}', status_code=503, media_type="application/json")
+
+
 def sniff_type(head: bytes):
     for magic, info in MAGIC.items():
         if head.startswith(magic):
@@ -59,6 +73,7 @@ def sniff_type(head: bytes):
 
 _failed_logins: dict[str, list[float]] = defaultdict(list)
 MAX_FAILS, LOCK_SECONDS = 5, 15 * 60
+RESCAN_BUDGET_SECONDS = 200
 
 
 class NotAuthenticated(Exception):
@@ -129,7 +144,8 @@ def logout(request: Request):
 
 @app.get("/")
 def upload_form(request: Request):
-    return templates.TemplateResponse(request, "upload.html", {"error": None, "form": {}})
+    return templates.TemplateResponse(request, "upload.html", {"error": None, "form": {},
+                                                               "max_mb": get_settings().max_upload_mb})
 
 
 @app.post("/upload")
@@ -147,7 +163,8 @@ async def upload(
     form = {"guard_name": guard_name, "guard_id": guard_id, "email": email, "site": site}
 
     def fail(msg):
-        return templates.TemplateResponse(request, "upload.html", {"error": msg, "form": form}, status_code=400)
+        return templates.TemplateResponse(request, "upload.html", {"error": msg, "form": form, "max_mb": s.max_upload_mb},
+                                          status_code=400)
 
     guard_name, guard_id = guard_name.strip(), guard_id.strip()
     if not guard_name or not guard_id:
@@ -163,18 +180,17 @@ async def upload(
         return fail("Unsupported file type. Please upload a JPG, PNG or PDF.")
     mime, ext = kind
 
-    s.upload_dir.mkdir(parents=True, exist_ok=True)
-    path = s.upload_dir / f"{secrets.token_hex(16)}{ext}"
-    path.write_bytes(data)
-
     sub = Submission(
         guard_name=guard_name[:200], guard_id=guard_id[:100], email=email.strip()[:200] or None,
         site=site.strip()[:200] or None, original_filename=(certificate.filename or "upload")[:300],
-        stored_path=str(path), sha256=hashlib.sha256(data).hexdigest(), mime=mime,
+        sha256=hashlib.sha256(data).hexdigest(), mime=mime, file=SubmissionFile(data=data),
     )
     db.add(sub)
     db.commit()
-    background.add_task(scanner.scan_by_id, sub.id)
+    if s.scan_mode == "sync":
+        scanner.scan_submission(db, sub)
+    else:
+        background.add_task(scanner.scan_by_id, sub.id)
     return templates.TemplateResponse(request, "upload_success.html", {"sub": sub})
 
 
@@ -203,7 +219,7 @@ def filtered(db, status: str = "", risk: str = "", site: str = "", q: str = "", 
 
 @app.get("/admin")
 def dashboard(request: Request, status: str = "", risk: str = "", site: str = "", q: str = "", reviewed: str = "",
-              _=Depends(require_admin), db=Depends(get_db)):
+              rescanned: int | None = None, remaining: int = 0, _=Depends(require_admin), db=Depends(get_db)):
     items = filtered(db, status, risk, site, q, reviewed)
     all_rows = reports.build_rows(filtered(db))
     sites = sorted({sub.site for sub in db.scalars(select(Submission)) if sub.site})
@@ -212,8 +228,9 @@ def dashboard(request: Request, status: str = "", risk: str = "", site: str = ""
         "items": items,
         "summary": reports.summary(all_rows),
         "filters": {"status": status, "risk": risk, "site": site, "q": q, "reviewed": reviewed},
-        "query": str(request.url.query),
-        "statuses": STATUSES, "sites": sites, "pending": pending,
+        "query": urlencode({k: v for k, v in [("status", status), ("risk", risk), ("site", site), ("q", q),
+                                               ("reviewed", reviewed)] if v}),
+        "statuses": STATUSES, "sites": sites, "pending": pending, "rescanned": rescanned, "remaining": remaining,
         "EXPIRED": EXPIRED, "EXPIRING": EXPIRING, "VALID": VALID, "UNKNOWN": UNKNOWN,
         "warning_months": get_settings().expiry_warning_months,
         "ai_configured": bool(get_settings().anthropic_api_key),
@@ -240,21 +257,19 @@ def detail(request: Request, sub_id: int, _=Depends(require_admin), db=Depends(g
 @app.get("/admin/submissions/{sub_id}/file")
 def submission_file(sub_id: int, _=Depends(require_admin), db=Depends(get_db)):
     sub = get_sub(db, sub_id)
-    path = Path(sub.stored_path)
-    if not path.exists():
-        raise HTTPException(404, "File missing")
-    return FileResponse(path, media_type=sub.mime, filename=sub.original_filename, content_disposition_type="inline")
+    ascii_name = sub.original_filename.encode("ascii", "ignore").decode().replace('"', "") or "certificate"
+    return Response(sub.data, media_type=sub.mime,
+                    headers={"Content-Disposition": f'inline; filename="{ascii_name}"'})
 
 
 @app.get("/admin/submissions/{sub_id}/preview.png")
 def submission_preview(sub_id: int, _=Depends(require_admin), db=Depends(get_db)):
     """First page of a PDF rendered as PNG (browsers, especially mobile, can't always show PDFs inline)."""
     sub = get_sub(db, sub_id)
-    path = Path(sub.stored_path)
-    if sub.mime != "application/pdf" or not path.exists():
+    if sub.mime != "application/pdf":
         raise HTTPException(404, "No preview")
     try:
-        png = pdf_utils.render_first_page_png(path.read_bytes(), zoom=1.5)
+        png = pdf_utils.render_first_page_png(sub.data, zoom=1.5)
     except Exception:
         raise HTTPException(422, "PDF could not be rendered")
     return Response(png, media_type="image/png")
@@ -271,12 +286,22 @@ def rescan(request: Request, sub_id: int, csrf: str = Form(""), _=Depends(requir
 def rescan_all(request: Request, background: BackgroundTasks, csrf: str = Form(""), only_failed: str = Form(""),
                _=Depends(require_admin), db=Depends(get_db)):
     check_csrf(request, csrf)
-    q = select(Submission.id)
+    q = select(Submission.id).order_by(Submission.scanned_at.asc().nulls_first())
     if only_failed:
         q = q.where(Submission.scan_status.in_(["pending", "error", "ai_unavailable"]))
-    for sub_id in db.scalars(q):
-        background.add_task(scanner.scan_by_id, sub_id)
-    return RedirectResponse("/admin", status_code=303)
+    ids = db.scalars(q).all()
+    if get_settings().scan_mode != "sync":
+        for sub_id in ids:
+            background.add_task(scanner.scan_by_id, sub_id)
+        return RedirectResponse("/admin", status_code=303)
+    # Serverless: scan oldest-first within the request time limit; the admin clicks again for the rest.
+    deadline, done = time.monotonic() + RESCAN_BUDGET_SECONDS, 0
+    for sub_id in ids:
+        if time.monotonic() > deadline:
+            break
+        scanner.scan_submission(db, get_sub(db, sub_id))
+        done += 1
+    return RedirectResponse(f"/admin?rescanned={done}&remaining={len(ids) - done}", status_code=303)
 
 
 @app.post("/admin/submissions/{sub_id}/update")
@@ -302,7 +327,6 @@ def update(request: Request, sub_id: int, csrf: str = Form(""), issue_date: str 
 def delete(request: Request, sub_id: int, csrf: str = Form(""), _=Depends(require_admin), db=Depends(get_db)):
     check_csrf(request, csrf)
     sub = get_sub(db, sub_id)
-    Path(sub.stored_path).unlink(missing_ok=True)
     db.delete(sub)
     db.commit()
     return RedirectResponse("/admin", status_code=303)
