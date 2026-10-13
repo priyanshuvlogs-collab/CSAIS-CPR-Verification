@@ -21,10 +21,71 @@
         <input name="site" maxlength="200" value="{{ form.site or '' }}">
       </label>
     </div>
-    <label>Certificate file (JPG, PNG or PDF) <span class="req">*</span>
-      <input type="file" name="certificate" required accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf">
+    <label>Certificate file (JPG, PNG or PDF, max {{ max_mb }} MB) <span class="req">*</span>
+      <input type="file" name="certificate" id="certificate" required accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf">
     </label>
-    <button class="btn primary" type="submit">Submit certificate</button>
+    <p class="muted small" id="file-note" hidden></p>
+    <button class="btn primary" type="submit" id="submit-btn">Submit certificate</button>
   </form>
+<script>
+(function () {
+  var MAX = {{ max_mb }} * 1024 * 1024;
+  var form = document.querySelector("form");
+  var input = document.getElementById("certificate");
+  var note = document.getElementById("file-note");
+  var btn = document.getElementById("submit-btn");
+  var busy = false;
+
+  // Large phone photos: shrink in the browser so they fit the upload limit.
+  function shrink(file) {
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () {
+        var scale = Math.min(1, 2400 / Math.max(img.width, img.height));
+        var canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(function (blob) {
+          blob ? resolve(new File([blob], file.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" }))
+               : reject(new Error("resize failed"));
+        }, "image/jpeg", 0.88);
+        URL.revokeObjectURL(img.src);
+      };
+      img.onerror = reject;
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
+  form.addEventListener("submit", function (e) {
+    if (busy) { e.preventDefault(); return; }
+    var file = input.files[0];
+    if (file && file.size > MAX && /^image\//.test(file.type) && window.DataTransfer) {
+      e.preventDefault();
+      note.hidden = false;
+      note.textContent = "Photo is large — resizing before upload…";
+      shrink(file).then(function (small) {
+        var dt = new DataTransfer();
+        dt.items.add(small);
+        input.files = dt.files;
+        note.textContent = "";
+        form.requestSubmit ? form.requestSubmit(btn) : form.submit();
+      }).catch(function () {
+        note.textContent = "This photo is too large. Please upload a smaller photo or a PDF.";
+      });
+      return;
+    }
+    if (file && file.size > MAX) {
+      e.preventDefault();
+      note.hidden = false;
+      note.textContent = "This file is larger than {{ max_mb }} MB. Please upload a smaller file.";
+      return;
+    }
+    busy = true;
+    btn.disabled = true;
+    btn.textContent = "Uploading and checking… this can take up to a minute";
+  });
+})();
+</script>
 </div>
 {% endblock %}

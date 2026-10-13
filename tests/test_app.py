@@ -204,3 +204,41 @@ def test_extract_fields_refusal():
 
     with pytest.raises(extract.AIRefused):
         extract.extract_fields(b"\xff\xd8\xff", "image/jpeg", client=_fake_claude({}, stop_reason="refusal"))
+
+
+def test_sync_scan_mode_and_batched_rescan(client, fake_ai, admin, monkeypatch):
+    import re
+
+    from app.config import get_settings
+    from app.db import SessionLocal
+    from app.models import Submission, SubmissionFile
+
+    monkeypatch.setattr(get_settings(), "scan_mode", "sync")
+    calls = []
+    monkeypatch.setattr("app.services.scanner.scan_by_id", lambda *a, **k: calls.append(a))
+    upload(client, make_cert_jpeg(), gid="G-1")
+    upload(client, make_cert_pdf(), "c.pdf", gid="G-2")
+    assert calls == []  # scanned in-request, not as a background task
+    with SessionLocal() as db:
+        assert all(s.scan_status == "done" for s in db.query(Submission))
+        assert db.query(SubmissionFile).count() == 2
+
+    token = re.search(r'name="csrf" value="([^"]+)"', client.get("/admin").text).group(1)
+    r = client.post("/admin/rescan-all", data={"csrf": token}, follow_redirects=False)
+    assert r.headers["location"] == "/admin?rescanned=2&remaining=0"
+    assert "Re-scanned 2 certificate(s)" in client.get(r.headers["location"]).text
+
+    # deleting a submission removes its stored file too
+    client.post("/admin/submissions/1/delete", data={"csrf": token})
+    with SessionLocal() as db:
+        assert db.query(SubmissionFile).count() == 1
+
+
+def test_export_links_keep_only_filters(client, admin):
+    r = client.get("/admin", params={"status": "Expired", "rescanned": 3})
+    assert "export.csv?status=Expired&quot;" not in r.text
+    assert 'href="/admin/reports/export.csv?status=Expired"' in r.text
+
+
+def test_healthz(client):
+    assert client.get("/healthz").json() == {"ok": True}
