@@ -68,3 +68,15 @@ class SubmissionFile(Base):
 
     submission_id: Mapped[int] = mapped_column(ForeignKey("submissions.id", ondelete="CASCADE"), primary_key=True)
     data: Mapped[bytes] = mapped_column(LargeBinary)
+
+
+class Site(Base):
+    """A CSAIS site/location. Guards pick one on upload; typing a new name adds it."""
+
+    __tablename__ = "sites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), unique=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    added_by: Mapped[str] = mapped_column(String(10), default="admin")  # admin | guard
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

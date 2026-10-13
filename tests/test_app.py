@@ -242,3 +242,63 @@ def test_export_links_keep_only_filters(client, admin):
 
 def test_healthz(client):
     assert client.get("/healthz").json() == {"ok": True}
+
+
+def _csrf(client, path="/admin/sites"):
+    import re
+
+    return re.search(r'name="csrf" value="([^"]+)"', client.get(path).text).group(1)
+
+
+def test_sites_dropdown_guard_add_and_admin_manage(client, fake_ai, admin):
+    from app.db import SessionLocal
+    from app.models import Site, Submission
+
+    token = _csrf(client)
+    r = client.post("/admin/sites", data={"csrf": token, "names": "Costco Scarborough\nWalmart Brampton, costco scarborough\n"},
+                    follow_redirects=False)
+    assert r.status_code == 303 and "Added+2+site" in r.headers["location"]
+
+    # guards see admin sites in the dropdown
+    page = client.get("/").text
+    assert '<option value="Costco Scarborough">' in page and '<option value="Walmart Brampton">' in page
+
+    # different spelling/case reuses the existing site; a new name is added by the guard
+    upload(client, make_cert_jpeg(), gid="G-1", site="  COSTCO   scarborough ")
+    upload(client, make_cert_pdf(), "c.pdf", name="Jane Doe", gid="G-2", site="Airport T3")
+    with SessionLocal() as db:
+        assert [s.site for s in db.query(Submission).order_by(Submission.id)] == ["Costco Scarborough", "Airport T3"]
+        new = db.query(Site).filter_by(name="Airport T3").one()
+        assert new.added_by == "guard" and new.active
+    assert '<option value="Airport T3">' in client.get("/").text
+
+    sites_page = client.get("/admin/sites").text
+    assert "added by guard" in sites_page and "Airport T3" in sites_page
+
+    # hiding a site removes it from the guard dropdown but keeps old records
+    with SessionLocal() as db:
+        walmart_id = db.query(Site).filter_by(name="Walmart Brampton").one().id
+    client.post(f"/admin/sites/{walmart_id}/toggle", data={"csrf": token})
+    assert "Walmart Brampton" not in client.get("/").text
+    assert "Walmart Brampton" in client.get("/admin/sites").text
+
+
+def test_site_is_required(client, fake_ai):
+    r = upload(client, make_cert_jpeg(), site=" ")
+    assert r.status_code == 400 and "choose your site" in r.text
+
+
+def test_sites_page_counts_latest_certificate_per_guard(client, fake_ai, admin):
+    fake_ai["response"] = {**fake_ai["response"], "expiry_date": "2020-01-01", "issue_date": "2018-01-01"}
+    upload(client, make_cert_jpeg(), gid="G-1", site="Mall")
+    fake_ai["response"] = {**fake_ai["response"], "expiry_date": "2099-01-01", "issue_date": "2097-01-01"}
+    upload(client, make_cert_pdf(), "renewed.pdf", gid="G-1", site="Mall")  # same guard renewed
+    page = client.get("/admin/sites").text
+    row = page[page.index("<strong>Mall</strong>"):page.index("</tr>", page.index("<strong>Mall</strong>"))]
+    assert "<td>1</td>" in row  # one guard, counted once
+    assert "st-expired" not in row  # the old expired upload is superseded
+
+
+def test_sites_require_admin(client):
+    assert client.get("/admin/sites", follow_redirects=False).status_code == 303
+    assert client.post("/admin/sites", data={"names": "X site"}, follow_redirects=False).status_code == 303
