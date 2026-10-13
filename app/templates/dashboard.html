@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_badge, risk_badge, scan_badge %}
+{% block title %}Dashboard · CPR Certificate Portal{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>CPR certificates</h1>
+  <div class="actions">
+    <a class="btn" href="/admin/reports/export.csv?{{ query }}">⬇ CSV</a>
+    <a class="btn" href="/admin/reports/export.xlsx?{{ query }}">⬇ Excel</a>
+    <a class="btn primary" href="/admin/reports/export.pdf?{{ query }}">⬇ PDF report</a>
+  </div>
+</div>
+
+{% if not ai_configured %}
+<div class="alert warn">ANTHROPIC_API_KEY is not set. File forensics still run, but certificate details and dates can't be read automatically. Add the key to <code>.env</code> and use “Re-scan incomplete”.</div>
+{% endif %}
+{% if pending %}<div class="alert info">{{ pending }} certificate(s) are still being scanned. Refresh in a moment.</div>{% endif %}
+
+<section class="tiles">
+  <a class="tile" href="/admin"><span class="num">{{ summary.total }}</span><span class="lbl">Total</span></a>
+  <a class="tile t-expired" href="?status={{ EXPIRED|urlencode }}"><span class="num">{{ summary[EXPIRED] }}</span><span class="lbl">Expired</span></a>
+  <a class="tile t-expiring" href="?status={{ EXPIRING|urlencode }}"><span class="num">{{ summary[EXPIRING] }}</span><span class="lbl">Expiring ≤ {{ warning_months }} months</span></a>
+  <a class="tile t-valid" href="?status={{ VALID|urlencode }}"><span class="num">{{ summary[VALID] }}</span><span class="lbl">Valid</span></a>
+  <a class="tile t-unknown" href="?status={{ UNKNOWN|urlencode }}"><span class="num">{{ summary[UNKNOWN] }}</span><span class="lbl">Unknown expiry</span></a>
+  <a class="tile t-risk" href="?risk=High"><span class="num">{{ summary['High'] }}</span><span class="lbl">High tamper risk</span></a>
+</section>
+
+<form class="filters" method="get" action="/admin">
+  <input type="search" name="q" value="{{ filters.q }}" placeholder="Search name, guard ID, cert #">
+  <select name="status"><option value="">All statuses</option>
+    {% for s in statuses %}<option {% if filters.status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+  </select>
+  <select name="risk"><option value="">All tamper risk</option>
+    {% for r in ['High', 'Medium', 'Low'] %}<option {% if filters.risk == r %}selected{% endif %}>{{ r }}</option>{% endfor %}
+  </select>
+  <select name="site"><option value="">All sites</option>
+    {% for s in sites %}<option {% if filters.site == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+  </select>
+  <select name="reviewed"><option value="">Reviewed: any</option>
+    <option value="no" {% if filters.reviewed == 'no' %}selected{% endif %}>Not reviewed</option>
+    <option value="yes" {% if filters.reviewed == 'yes' %}selected{% endif %}>Reviewed</option>
+  </select>
+  <button class="btn">Filter</button>
+  <a class="btn ghost" href="/admin">Clear</a>
+</form>
+
+<div class="table-wrap">
+<table class="data">
+  <thead><tr>
+    <th>Guard</th><th>Site</th><th>Issuer</th><th>Expiry</th><th>Status</th><th>Tamper risk</th><th>Uploaded</th><th></th>
+  </tr></thead>
+  <tbody>
+  {% for sub, info in items %}
+    <tr>
+      <td><a href="/admin/submissions/{{ sub.id }}"><strong>{{ sub.guard_name }}</strong></a><br><span class="muted small">{{ sub.guard_id }}</span>
+        {% if sub.name_match == false %}<br><span class="badge risk-medium small">name mismatch</span>{% endif %}</td>
+      <td>{{ sub.site or '—' }}</td>
+      <td>{{ sub.issuer or '—' }}</td>
+      <td>{{ sub.expiry_date or '—' }}{% if sub.expiry_inferred %} <span class="muted small" title="Calculated from issue date + 2 years">(inferred)</span>{% endif %}
+        {% if info.days_left is not none %}<br><span class="muted small">{% if info.days_left < 0 %}{{ -info.days_left }} days ago{% else %}{{ info.days_left }} days left{% endif %}</span>{% endif %}</td>
+      <td>{{ status_badge(info.status) }} {{ scan_badge(sub) }}</td>
+      <td>{{ risk_badge(sub.tamper_level, sub.tamper_score) }}</td>
+      <td class="small">{{ sub.uploaded_at.strftime('%Y-%m-%d') }}</td>
+      <td>{% if sub.reviewed %}<span class="muted small">✓ reviewed</span>{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="8" class="empty">No certificates match these filters.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<form method="post" action="/admin/rescan-all" class="footer-actions">
+  <input type="hidden" name="csrf" value="{{ csrf_token(request) }}">
+  <button class="btn ghost" name="only_failed" value="1">Re-scan incomplete</button>
+  <button class="btn ghost" onclick="return confirm('Re-scan every certificate? This uses Claude API credits.')">Re-scan all</button>
+</form>
+{% endblock %}

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}CPR Certificate Portal{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{% if request.session.get('admin') %}/admin{% else %}/{% endif %}">
+      <span class="logo">✚</span> CPR Certificate Portal
+    </a>
+    <nav>
+      {% if request.session.get('admin') %}
+        <a href="/admin">Dashboard</a>
+        <a href="/">Upload form</a>
+        <form method="post" action="/admin/logout" class="inline"><button class="link">Log out</button></form>
+      {% else %}
+        <a href="/admin/login">Admin</a>
+      {% endif %}
+    </nav>
+  </header>
+  <main class="{% block main_class %}container{% endblock %}">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

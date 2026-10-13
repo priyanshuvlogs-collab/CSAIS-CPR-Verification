@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Certificate received{% endblock %}
+{% block main_class %}container narrow{% endblock %}
+{% block content %}
+<div class="card center">
+  <div class="big-check">✓</div>
+  <h1>Thank you, {{ sub.guard_name }}</h1>
+  <p>Your certificate <strong>{{ sub.original_filename }}</strong> has been received and will be reviewed.</p>
+  <p class="muted">Reference #{{ sub.id }}</p>
+  <a class="btn" href="/">Upload another certificate</a>
+</div>
+{% endblock %}

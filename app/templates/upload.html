@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Upload CPR Certificate{% endblock %}
+{% block main_class %}container narrow{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Upload your CPR certificate</h1>
+  <p class="muted">Upload a clear photo or PDF of your current CPR / BLS / First Aid certificate. Make sure your name and the dates are readable.</p>
+  {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+  <form method="post" action="/upload" enctype="multipart/form-data" class="stack">
+    <label>Full name <span class="req">*</span>
+      <input name="guard_name" required maxlength="200" value="{{ form.guard_name or '' }}" autocomplete="name">
+    </label>
+    <label>Guard ID / Licence number <span class="req">*</span>
+      <input name="guard_id" required maxlength="100" value="{{ form.guard_id or '' }}">
+    </label>
+    <div class="row2">
+      <label>Email
+        <input type="email" name="email" maxlength="200" value="{{ form.email or '' }}" autocomplete="email">
+      </label>
+      <label>Site / Location
+        <input name="site" maxlength="200" value="{{ form.site or '' }}">
+      </label>
+    </div>
+    <label>Certificate file (JPG, PNG or PDF) <span class="req">*</span>
+      <input type="file" name="certificate" required accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf">
+    </label>
+    <button class="btn primary" type="submit">Submit certificate</button>
+  </form>
+</div>
+{% endblock %}
